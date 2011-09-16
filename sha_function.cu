@@ -1,6 +1,6 @@
 #include "sha_function.h"
 #include <time.h>
-#define word    unsigned int
+#define word unsigned int 
 
 /* f1 to f4 */
 
@@ -33,20 +33,22 @@ __device__ inline word ROT(word x,int n){ return ( ( x << n ) | ( x >> ( 32 - n 
 #define CALC(n,i) temp =  ROT ( A , 5 ) + f##n( B , C, D ) +  W[i] + E + C##n  ; E = D; D = C; C = ROT ( B , 30 ); B = A; A = temp
 
 
-__shared__ unsigned int * hash;
+__shared__ word * hash;
 
 int main()
 {
     char input[40], tmp[8]; 
     unsigned char * res;
-    unsigned int hash[5];
+    word hash[5];
     double time_tmp, time;
 
+    // Init output and scan input
 
     printf("------------------------------------------------\n");
     printf("Welcome to a SHA-brute force programm using cuda\n");
     printf("------------------------------------------------\n\n");
     printf("Please enter your hash value: \t");
+
     
     scanf("%s", input);
 
@@ -68,6 +70,9 @@ int main()
     for(int i = 0; i < 10; i++)
         res[i] = 0;
 
+
+    // Start calculation
+
     time = 0;   
 
     clock_t test = clock();
@@ -84,36 +89,42 @@ int main()
         time += time_tmp;
         printf("Finished. Time needed: %f\n", time_tmp);
         printf("Result: %s\n\n", (res[0] == 0 ? "No result found." : res));
+	// If res != 0 (hash found) stop
 	if(res[0] != 0) break;
         for(int j = 0; j < 10; j++)
             res[j] = 0;
     }
-
+    // res still 0, no result
     if(res[0] == 0)
-	printf("Unfortunately no valid hash was found :( \n Check your input characters or password too long?\n");
+	printf("Unfortunately no valid hash was found :( \n Check your input character range. But maybe the password is too long?\n");
     else
 	printf("Total execution time: %f \n", time);
 
     return 1;
 }
 
-void start(unsigned int * hash_tmp,  int length, unsigned char * res)
+void start(word * hash_tmp,  int length, unsigned char * res)
 {
     unsigned char * buffer = 0;
-    cutilSafeCall ( cudaMalloc((void** ) &buffer, 10 * sizeof(unsigned char)) );
-    cutilSafeCall ( cudaMalloc((void** ) &hash, 5 * sizeof(unsigned int)) );
-    
     unsigned char * buffer_fill[10];
+    cutilSafeCall ( cudaMalloc((void** ) &buffer, 10 * sizeof(unsigned char)) );
+    cutilSafeCall ( cudaMalloc((void** ) &hash, 5 * sizeof(word)) );
+    
+
     for(int i = 0; i <10; i++)
         buffer_fill[i] = 0x0; 
     
-    cudaMemcpy (hash, hash_tmp, 5 * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy (hash, hash_tmp, 5 * sizeof(word), cudaMemcpyHostToDevice);
     cudaMemcpy (buffer, buffer_fill, 10 * sizeof(unsigned char), cudaMemcpyHostToDevice);
     
+    // Call actual brute force kernel-function with 
+    // - blocks: count of possible chars squared
+    // - threads: possible chars
+   
     smash<<<9025,95>>>(length, buffer, hash);
 
     cudaMemcpy(res, buffer, 10 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
-    //cudaMemcpy(debug, hash, 5 * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+    //cudaMemcpy(debug, hash, 5 * sizeof(word), cudaMemcpyDeviceToHost);
 
     cudaError_t err = cudaGetLastError();
     if( cudaSuccess != err) 
@@ -125,9 +136,31 @@ void start(unsigned int * hash_tmp,  int length, unsigned char * res)
 }
 
 
-__global__ void smash(int length, unsigned char * buffer, unsigned int * hash)
+/*
+ * kernel-function __global__ void smash(int, char, in)
+ *
+ * Initialize with count of possible chars squared as the block-num
+ * and count of possible chars as the thread-num
+ * With cx (where cx is char at position x of the tested word) the 
+ * first 3 chars are set like:
+ * 
+ *   - c0: thread-num
+ *   - c1: block-num / 95
+ *   - c2: block-num % 95
+ *
+ * That guarantees every possible unique combination of the first
+ * the chars.
+ *
+ * input:
+ *   - length: length of the words 
+ *   - buffer: buffer to write-back result, return value
+ *   - hash: hash that needs to be decrypted
+ *
+*/
+
+__global__ void smash(int length, unsigned char * buffer, word * hash)
 {
-    unsigned int h0,h1,h2,h3,h4;
+    word h0,h1,h2,h3,h4;
     int higher = 126;
     int lower = 32;
     unsigned char input_cpy[10];
@@ -160,7 +193,7 @@ __global__ void smash(int length, unsigned char * buffer, unsigned int * hash)
             input_cpy[i] = 0;
 
     // Init words for SHA
-    unsigned int W[80],A,B,C,D,E,temp;
+    word W[80],A,B,C,D,E,temp;
  
     // calculate all possible charsets with the
     // given threadId, blockId and length
@@ -194,7 +227,7 @@ __global__ void smash(int length, unsigned char * buffer, unsigned int * hash)
     
         // That needs to be done, == with like (A + I1) =0 hash[0] 
         // is wrong all the time?!
-        unsigned int tmp1, tmp2, tmp3, tmp4, tmp5;   
+        word tmp1, tmp2, tmp3, tmp4, tmp5;   
  
         tmp1 = A + I1;
         tmp2 = B + I2;
@@ -248,7 +281,14 @@ __global__ void smash(int length, unsigned char * buffer, unsigned int * hash)
 }
 
 
-__device__ void memInit(unsigned int * tmp, unsigned char input[], int length)
+/*
+ * device function __device__ void memInit(uint, uchar, int)
+ * 
+ * Prepare word for sha-1 (expand, add length etc)
+*/
+
+
+__device__ void memInit(word * tmp, unsigned char input[], int length)
 {
 
     int stop = 0;
